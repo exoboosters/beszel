@@ -1,8 +1,11 @@
 package hub
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -190,6 +193,9 @@ func (h *Hub) registerApiRoutes(se *core.ServeEvent) error {
 	apiAuth.POST("/test-heartbeat", h.testHeartbeat).BindFunc(requireAdminRole)
 	// get config.yml content
 	apiAuth.GET("/config-yaml", config.GetYamlConfig).BindFunc(requireAdminRole)
+	// appearance settings (admin only)
+	apiAuth.GET("/appearance", h.getAppearanceSettings).BindFunc(requireAdminRole)
+	apiAuth.POST("/appearance", h.saveAppearanceSettings).BindFunc(requireAdminRole)
 	// handle agent websocket connection
 	apiNoAuth.GET("/agent-connect", h.handleAgentConnect)
 	// get or create universal tokens
@@ -223,10 +229,23 @@ func (h *Hub) getInfo(e *core.RequestEvent) error {
 		Key         string `json:"key"`
 		Version     string `json:"v"`
 		CheckUpdate bool   `json:"cu"`
+		CustomLogo  string `json:"customLogo,omitempty"`
+		TextColorL  string `json:"textColorLight,omitempty"`
+		TextColorD  string `json:"textColorDark,omitempty"`
 	}
 	info := infoResponse{
 		Key:     h.pubKey,
 		Version: beszel.Version,
+	}
+	settings := h.Settings()
+	if logo, ok := settings.Meta.Raw["customLogo"].(string); ok {
+		info.CustomLogo = logo
+	}
+	if textColorL, ok := settings.Meta.Raw["textColorLight"].(string); ok {
+		info.TextColorL = textColorL
+	}
+	if textColorD, ok := settings.Meta.Raw["textColorDark"].(string); ok {
+		info.TextColorD = textColorD
 	}
 	if optIn, _ := utils.GetEnv("CHECK_UPDATES"); optIn == "true" {
 		info.CheckUpdate = true
@@ -544,4 +563,112 @@ func (h *Hub) refreshZfsData(e *core.RequestEvent) error {
 	}
 
 	return e.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+type AppearanceSettings struct {
+	CustomLogo      string `json:"customLogo"`
+	TextColorLight string `json:"textColorLight"`
+	TextColorDark  string `json:"textColorDark"`
+}
+
+func (h *Hub) getAppearanceSettings(e *core.RequestEvent) error {
+	settings := h.Settings()
+	appearance := AppearanceSettings{}
+	if logo, ok := settings.Meta.Raw["customLogo"].(string); ok {
+		appearance.CustomLogo = logo
+	}
+	if textColorL, ok := settings.Meta.Raw["textColorLight"].(string); ok {
+		appearance.TextColorLight = textColorL
+	}
+	if textColorD, ok := settings.Meta.Raw["textColorDark"].(string); ok {
+		appearance.TextColorDark = textColorD
+	}
+	return e.JSON(http.StatusOK, appearance)
+}
+
+func validateRawSVG(svgStr string) error {
+	trimmed := strings.TrimSpace(svgStr)
+	if trimmed == "" {
+		return nil
+	}
+	if len(trimmed) > 500000 {
+		return fmt.Errorf("SVG payload exceeds maximum allowed size (500KB)")
+	}
+	decoder := xml.NewDecoder(bytes.NewReader([]byte(trimmed)))
+	decoder.Strict = false
+	foundRootSVG := false
+
+	disallowedTags := map[string]bool{
+		"script":   true,
+		"iframe":   true,
+		"object":   true,
+		"embed":    true,
+		"applet":   true,
+		"foreignobject": true,
+	}
+
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("invalid XML/SVG syntax: %w", err)
+		}
+
+		if se, ok := tok.(xml.StartElement); ok {
+			localName := strings.ToLower(se.Name.Local)
+			if disallowedTags[localName] {
+				return fmt.Errorf("SVG contains disallowed element <%s>", localName)
+			}
+			if !foundRootSVG {
+				if localName != "svg" {
+					return fmt.Errorf("root element must be <svg>, found <%s>", localName)
+				}
+				foundRootSVG = true
+			}
+			for _, attr := range se.Attr {
+				attrName := strings.ToLower(attr.Name.Local)
+				attrVal := strings.TrimSpace(strings.ToLower(attr.Value))
+				if strings.HasPrefix(attrName, "on") {
+					return fmt.Errorf("SVG contains event handler attribute '%s'", attr.Name.Local)
+				}
+				if strings.HasPrefix(attrVal, "javascript:") || strings.HasPrefix(attrVal, "vbscript:") || strings.HasPrefix(attrVal, "data:text/html") {
+					return fmt.Errorf("SVG contains dangerous URI in attribute '%s'", attr.Name.Local)
+				}
+			}
+		}
+	}
+
+	if !foundRootSVG {
+		return fmt.Errorf("no valid <svg> root element found")
+	}
+
+	return nil
+}
+
+func (h *Hub) saveAppearanceSettings(e *core.RequestEvent) error {
+	var body AppearanceSettings
+	if err := e.BindBody(&body); err != nil {
+		return e.BadRequestError("Invalid request body", err)
+	}
+
+	body.CustomLogo = strings.TrimSpace(body.CustomLogo)
+	if err := validateRawSVG(body.CustomLogo); err != nil {
+		return e.BadRequestError(fmt.Sprintf("Invalid SVG logo: %v", err), nil)
+	}
+
+	settings := h.Settings()
+	if settings.Meta.Raw == nil {
+		settings.Meta.Raw = make(map[string]any)
+	}
+	settings.Meta.Raw["customLogo"] = body.CustomLogo
+	settings.Meta.Raw["textColorLight"] = strings.TrimSpace(body.TextColorLight)
+	settings.Meta.Raw["textColorDark"] = strings.TrimSpace(body.TextColorDark)
+
+	if err := h.Save(settings); err != nil {
+		return e.InternalServerError("Failed to save settings", err)
+	}
+
+	return e.JSON(http.StatusOK, body)
 }

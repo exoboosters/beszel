@@ -12,6 +12,7 @@ import {
 	LogsIcon,
 	MailIcon,
 	NetworkIcon,
+	PaletteIcon,
 	Server,
 	ServerIcon,
 	SettingsIcon,
@@ -184,6 +185,18 @@ export default memo(function CommandPalette({ open, setOpen }: { open: boolean; 
 							<AlertOctagonIcon className="me-2 size-4" />
 							<span>
 								<Trans>Alert History</Trans>
+							</span>
+							{SettingsShortcut}
+						</CommandItem>
+						<CommandItem
+							onSelect={() => {
+								navigate(getPagePath($router, "settings", { name: "appearance" }))
+								setOpen(false)
+							}}
+						>
+							<PaletteIcon className="me-2 size-4" />
+							<span>
+								<Trans>Appearance</Trans>
 							</span>
 							{SettingsShortcut}
 						</CommandItem>

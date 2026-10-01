@@ -10,7 +10,6 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "@/components/ui/use-toast"
@@ -18,7 +17,7 @@ import { alertInfo } from "@/lib/alerts"
 import { pb } from "@/lib/api"
 import { $alerts, $systems } from "@/lib/stores"
 import { cn, debounce } from "@/lib/utils"
-import type { AlertInfo, AlertRecord, AlertUnit, SystemRecord } from "@/types"
+import type { AlertInfo, AlertRecord, SystemRecord } from "@/types"
 
 const Slider = lazy(() => import("@/components/ui/slider"))
 
@@ -27,24 +26,6 @@ const endpoint = "/api/beszel/user-alerts"
 const alertDebounce = 400
 
 const alertKeys = Object.keys(alertInfo) as (keyof typeof alertInfo)[]
-
-/** Round to a multiple of step, trimming float noise like 0.30000000000000004 */
-const roundToStep = (val: number, step: number) => Number((Math.round(val / step) * step).toFixed(6))
-
-/** Number input step and minimum for a unit, which may be finer than the slider */
-const getInputRange = ({ min, step, inputStep = step }: AlertUnit) => ({ step: inputStep, min: Math.min(min, inputStep) })
-
-/** Index of the unit to display a stored value in: the largest unit whose input range and step fit it */
-function getUnitIndex(units: AlertUnit[], value: number) {
-	for (let i = units.length - 1; i > 0; i--) {
-		const { min, step } = getInputRange(units[i])
-		const val = value / units[i].factor
-		if (val >= min && val <= units[i].max && Math.abs(roundToStep(val, step) - val) < 1e-6) {
-			return i
-		}
-	}
-	return 0
-}
 
 const failedUpdateToast = (error: unknown) => {
 	console.error(error)
@@ -264,17 +245,7 @@ export function AlertContent({
 
 	const [checked, setChecked] = useState(global ? false : !!alert)
 	const [min, setMin] = useState(alert?.min || (noDuration ? 0 : 10))
-	const { units } = alertData
-	const storedValue = alert?.value ?? (noThreshold ? 0 : (alertData.start ?? 80))
-	const [unitIndex, setUnitIndex] = useState(() => (units ? getUnitIndex(units, storedValue) : 0))
-	/** Selected threshold unit, if the alert has selectable units */
-	const unit = units?.[unitIndex]
-	const factor = unit?.factor ?? 1
-	const unitLabel = unit?.unit ?? alertData.unit
-	const { min: valueMin, max: valueMax, step = 1 } = unit ?? alertData
-	const { min: inputMin, step: inputStep } = unit ? getInputRange(unit) : { min: valueMin, step }
-	/** Threshold value in the selected unit */
-	const [value, setValue] = useState(() => Number((storedValue / factor).toFixed(6)))
+	const [value, setValue] = useState(alert?.value ?? (noThreshold ? 0 : (alertData.start ?? 80)))
 
 	const Icon = alertData.icon
 
@@ -296,12 +267,12 @@ export function AlertContent({
 		return systemIds
 	}
 
-	function sendUpsert(min: number, value: number, valueFactor = factor) {
+	function sendUpsert(min: number, value: number) {
 		const systems = getSystemIds()
 		systems.length &&
 			upsertAlerts({
 				name: alertKey,
-				value: Number((value * valueFactor).toFixed(6)),
+				value,
 				min,
 				systems,
 			})
@@ -355,7 +326,7 @@ export function AlertContent({
 											Average drops below{" "}
 											<strong className="text-foreground">
 												{value}
-												{unitLabel}
+												{alertData.unit}
 											</strong>
 										</Trans>
 									) : (
@@ -363,7 +334,7 @@ export function AlertContent({
 											Average exceeds{" "}
 											<strong className="text-foreground">
 												{value}
-												{unitLabel}
+												{alertData.unit}
 											</strong>
 										</Trans>
 									)}
@@ -374,9 +345,9 @@ export function AlertContent({
 										value={[value]}
 										onValueCommit={(val) => sendUpsert(min, val[0])}
 										onValueChange={(val) => setValue(val[0])}
-										step={step}
-										min={valueMin ?? 1}
-										max={valueMax ?? 99}
+										step={alertData.step ?? 1}
+										min={alertData.min ?? 1}
+										max={alertData.max ?? 99}
 									/>
 									<Input
 										type="number"
@@ -384,45 +355,17 @@ export function AlertContent({
 										onChange={(e) => {
 											let val = parseFloat(e.target.value)
 											if (!Number.isNaN(val)) {
-												// keep values on the step grid so the unit can be inferred on reload
-												if (unit) val = roundToStep(val, inputStep)
-												if (valueMax != null) val = Math.min(val, valueMax)
-												if (inputMin != null) val = Math.max(val, inputMin)
+												if (alertData.max != null) val = Math.min(val, alertData.max)
+												if (alertData.min != null) val = Math.max(val, alertData.min)
 												setValue(val)
 												sendUpsert(min, val)
 											}
 										}}
-										step={inputStep}
-										min={inputMin ?? 1}
-										max={valueMax ?? 99}
+										step={alertData.step ?? 1}
+										min={alertData.min ?? 1}
+										max={alertData.max ?? 99}
 										className="w-16 h-8 text-center px-1"
 									/>
-									{units && (
-										<Select
-											value={String(unitIndex)}
-											onValueChange={(index) => {
-												const next = units[Number(index)]
-												const nextInput = getInputRange(next)
-												// convert the current threshold to the new unit, clamped to its range
-												const val = roundToStep((value * factor) / next.factor, nextInput.step)
-												const clamped = Math.min(Math.max(val, nextInput.min), next.max)
-												setUnitIndex(Number(index))
-												setValue(clamped)
-												sendUpsert(min, clamped, next.factor)
-											}}
-										>
-											<SelectTrigger className="w-auto shrink-0 h-8 gap-1.5 px-2.5">
-												<SelectValue />
-											</SelectTrigger>
-											<SelectContent>
-												{units.map(({ unit }, i) => (
-													<SelectItem key={unit} value={String(i)}>
-														{unit.trim()}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
-									)}
 								</div>
 							</div>
 						)}

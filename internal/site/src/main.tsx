@@ -15,6 +15,7 @@ import { alertManager } from "@/lib/alerts"
 import { isAdmin, pb, updateUserSettings } from "@/lib/api.ts"
 import { dynamicActivate, getLocale } from "@/lib/i18n"
 import {
+	$appearanceSettings,
 	$authenticated,
 	$copyContent,
 	$direction,
@@ -46,6 +47,11 @@ const App = memo(() => {
 		// get general info for authenticated users, such as public key and version
 		pb.send<BeszelInfo>("/api/beszel/info", {}).then((data) => {
 			$publicKey.set(data.key)
+			$appearanceSettings.set({
+				customLogo: data.customLogo,
+				textColorLight: data.textColorLight,
+				textColorDark: data.textColorDark,
+			})
 			// check for updates if enabled
 			if (data.cu && isAdmin()) {
 				pb.send<UpdateInfo>("/api/beszel/update", {}).then($newVersion.set)

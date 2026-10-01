@@ -1,4 +1,6 @@
+import { useStore } from "@nanostores/react"
 import { createContext, useContext, useEffect, useState } from "react"
+import { $appearanceSettings } from "@/lib/stores"
 
 type Theme = "dark" | "light" | "system"
 type ResolvedTheme = "dark" | "light"
@@ -42,12 +44,23 @@ export function ThemeProvider({
 
 	const resolvedTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme
 
+	const appearance = useStore($appearanceSettings)
+
 	useEffect(() => {
 		const root = window.document.documentElement
 
 		root.classList.remove("light", "dark")
 		root.classList.add(resolvedTheme)
-	}, [resolvedTheme])
+
+		// Apply custom text colors if configured
+		if (resolvedTheme === "dark" && appearance.textColorDark) {
+			root.style.setProperty("--foreground", appearance.textColorDark)
+		} else if (resolvedTheme === "light" && appearance.textColorLight) {
+			root.style.setProperty("--foreground", appearance.textColorLight)
+		} else {
+			root.style.removeProperty("--foreground")
+		}
+	}, [resolvedTheme, appearance.textColorDark, appearance.textColorLight])
 
 	const value = {
 		theme,

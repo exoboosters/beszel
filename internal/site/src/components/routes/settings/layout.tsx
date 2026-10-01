@@ -8,6 +8,7 @@ import {
 	FileSlidersIcon,
 	FingerprintIcon,
 	HeartPulseIcon,
+	PaletteIcon,
 	SettingsIcon,
 } from "lucide-react"
 import { lazy, useEffect } from "react"
@@ -21,6 +22,7 @@ import { Separator } from "../../ui/separator"
 import { SidebarNav } from "./sidebar-nav.tsx"
 
 const generalSettingsImport = () => import("./general.tsx")
+const appearanceSettingsImport = () => import("./appearance.tsx")
 const notificationsSettingsImport = () => import("./notifications.tsx")
 const configYamlSettingsImport = () => import("./config-yaml.tsx")
 const fingerprintsSettingsImport = () => import("./tokens-fingerprints.tsx")
@@ -28,6 +30,7 @@ const alertsHistoryDataTableSettingsImport = () => import("./alerts-history-data
 const heartbeatSettingsImport = () => import("./heartbeat.tsx")
 
 const GeneralSettings = lazy(generalSettingsImport)
+const AppearanceSettings = lazy(appearanceSettingsImport)
 const NotificationsSettings = lazy(notificationsSettingsImport)
 const ConfigYamlSettings = lazy(configYamlSettingsImport)
 const FingerprintsSettings = lazy(fingerprintsSettingsImport)
@@ -78,6 +81,13 @@ export default function SettingsLayout() {
 			href: getPagePath($router, "settings", { name: "alert-history" }),
 			icon: AlertOctagonIcon,
 			preload: alertsHistoryDataTableSettingsImport,
+		},
+		{
+			title: t`Appearance`,
+			href: getPagePath($router, "settings", { name: "appearance" }),
+			icon: PaletteIcon,
+			admin: true,
+			preload: appearanceSettingsImport,
 		},
 		{
 			title: t`Heartbeat`,
@@ -138,6 +148,8 @@ function SettingsContent({ name }: { name: string }) {
 	switch (name) {
 		case "general":
 			return <GeneralSettings userSettings={userSettings} />
+		case "appearance":
+			return <AppearanceSettings />
 		case "notifications":
 			return <NotificationsSettings userSettings={userSettings} />
 		case "config":
