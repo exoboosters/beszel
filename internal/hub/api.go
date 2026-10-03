@@ -3,6 +3,7 @@ package hub
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -237,16 +240,10 @@ func (h *Hub) getInfo(e *core.RequestEvent) error {
 		Key:     h.pubKey,
 		Version: beszel.Version,
 	}
-	settings := h.Settings()
-	if logo, ok := settings.Meta.Raw["customLogo"].(string); ok {
-		info.CustomLogo = logo
-	}
-	if textColorL, ok := settings.Meta.Raw["textColorLight"].(string); ok {
-		info.TextColorL = textColorL
-	}
-	if textColorD, ok := settings.Meta.Raw["textColorDark"].(string); ok {
-		info.TextColorD = textColorD
-	}
+	appearance := h.loadAppearance()
+	info.CustomLogo = appearance.CustomLogo
+	info.TextColorL = appearance.TextColorLight
+	info.TextColorD = appearance.TextColorDark
 	if optIn, _ := utils.GetEnv("CHECK_UPDATES"); optIn == "true" {
 		info.CheckUpdate = true
 	}
@@ -566,24 +563,40 @@ func (h *Hub) refreshZfsData(e *core.RequestEvent) error {
 }
 
 type AppearanceSettings struct {
-	CustomLogo      string `json:"customLogo"`
+	CustomLogo     string `json:"customLogo"`
 	TextColorLight string `json:"textColorLight"`
 	TextColorDark  string `json:"textColorDark"`
 }
 
+// appearanceFile returns the path to the appearance settings JSON file.
+func (h *Hub) appearanceFile() string {
+	return path.Join(h.DataDir(), "appearance.json")
+}
+
+// loadAppearance reads appearance settings from disk. Returns empty defaults on missing/corrupt file.
+func (h *Hub) loadAppearance() AppearanceSettings {
+	data, err := os.ReadFile(h.appearanceFile())
+	if err != nil {
+		return AppearanceSettings{}
+	}
+	var s AppearanceSettings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return AppearanceSettings{}
+	}
+	return s
+}
+
+// saveAppearance writes appearance settings to disk as JSON.
+func (h *Hub) saveAppearance(s AppearanceSettings) error {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(h.appearanceFile(), data, 0600)
+}
+
 func (h *Hub) getAppearanceSettings(e *core.RequestEvent) error {
-	settings := h.Settings()
-	appearance := AppearanceSettings{}
-	if logo, ok := settings.Meta.Raw["customLogo"].(string); ok {
-		appearance.CustomLogo = logo
-	}
-	if textColorL, ok := settings.Meta.Raw["textColorLight"].(string); ok {
-		appearance.TextColorLight = textColorL
-	}
-	if textColorD, ok := settings.Meta.Raw["textColorDark"].(string); ok {
-		appearance.TextColorDark = textColorD
-	}
-	return e.JSON(http.StatusOK, appearance)
+	return e.JSON(http.StatusOK, h.loadAppearance())
 }
 
 func validateRawSVG(svgStr string) error {
@@ -658,16 +671,11 @@ func (h *Hub) saveAppearanceSettings(e *core.RequestEvent) error {
 		return e.BadRequestError(fmt.Sprintf("Invalid SVG logo: %v", err), nil)
 	}
 
-	settings := h.Settings()
-	if settings.Meta.Raw == nil {
-		settings.Meta.Raw = make(map[string]any)
-	}
-	settings.Meta.Raw["customLogo"] = body.CustomLogo
-	settings.Meta.Raw["textColorLight"] = strings.TrimSpace(body.TextColorLight)
-	settings.Meta.Raw["textColorDark"] = strings.TrimSpace(body.TextColorDark)
+	body.TextColorLight = strings.TrimSpace(body.TextColorLight)
+	body.TextColorDark = strings.TrimSpace(body.TextColorDark)
 
-	if err := h.Save(settings); err != nil {
-		return e.InternalServerError("Failed to save settings", err)
+	if err := h.saveAppearance(body); err != nil {
+		return e.InternalServerError("Failed to save appearance settings", err)
 	}
 
 	return e.JSON(http.StatusOK, body)
